@@ -181,13 +181,45 @@ public class DefaultChunkRenderer extends ShaderChunkRenderer {
         final var pElementCount = batch.pElementCount;
 
         int size = batch.size;
+        int groupElementCount = 0;
+        int groupBaseVertex = 0;
+        int lastMaskBit = 0;
 
-        for (int facing = 0; facing < ModelQuadFacing.COUNT; facing++) {
-            MemoryUtil.memPutInt(pBaseVertex + (size << 2), SectionRenderDataUnsafe.getVertexOffset(pMeshData, facing));
-            MemoryUtil.memPutInt(pElementCount + (size << 2), SectionRenderDataUnsafe.getElementCount(pMeshData, facing));
-            MemoryUtil.memPutAddress(pElementPointer + (size << 3), 0 /* using a shared index buffer */);
+        for (int i = 0; i <= ModelQuadFacing.COUNT; i++) {
+            var maskBit = 0;
+            var elementCount = 0;
+            if (i < ModelQuadFacing.COUNT) {
+                var elementCountAndFacing = SectionRenderDataUnsafe.getElementCountAndFacing(pMeshData, i);
+                elementCount = SectionRenderDataUnsafe.getElementCount(elementCountAndFacing);
 
-            size += (mask >> facing) & 1;
+                // if there's no elements, the mask bit is just 0
+                if (elementCount != 0) {
+                    var facing = SectionRenderDataUnsafe.getFacing(elementCountAndFacing);
+                    maskBit = (mask >> facing) & 1;
+                }
+            }
+
+            if (maskBit == 0) {
+                if (lastMaskBit == 1) {
+                    // delay writing out draw command if there's a zero-size group
+                    if (i < ModelQuadFacing.COUNT && elementCount == 0) {
+                        continue;
+                    }
+
+                    MemoryUtil.memPutInt(pElementCount + (size << 2), groupElementCount);
+                    MemoryUtil.memPutInt(pBaseVertex + (size << 2), groupBaseVertex);
+                    MemoryUtil.memPutAddress(pElementPointer + (size << 3), 0);
+                    size++;
+                    groupElementCount = 0;
+                }
+            } else {
+                groupElementCount += elementCount;
+                if (lastMaskBit == 0) {
+                    groupBaseVertex = SectionRenderDataUnsafe.getVertexOffset(pMeshData, i);
+                }
+            }
+
+            lastMaskBit = maskBit;
         }
 
         batch.size = size;
@@ -235,7 +267,7 @@ public class DefaultChunkRenderer extends ShaderChunkRenderer {
     private static final int MODEL_NEG_Y      = ModelQuadFacing.NEG_Y.ordinal();
     private static final int MODEL_NEG_Z      = ModelQuadFacing.NEG_Z.ordinal();
 
-    private static int getVisibleFaces(int originX, int originY, int originZ, int chunkX, int chunkY, int chunkZ) {
+    public static int getVisibleFaces(int originX, int originY, int originZ, int chunkX, int chunkY, int chunkZ) {
         // This is carefully written so that we can keep everything branch-less.
         //
         // Normally, this would be a ridiculous way to handle the problem. But the Hotspot VM's
